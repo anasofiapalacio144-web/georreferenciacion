@@ -1,7 +1,7 @@
 streamlit
 pandas
 matplotlib
-geopandas
+geopandas==0.14.4
 mapclassify
 shapely
 fiona
