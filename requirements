@@ -1,0 +1,9 @@
+os
+geopandas
+pandas
+matplotlib.pyplot
+mapclassify
+contextily
+Point
+numpy
+streamlit
