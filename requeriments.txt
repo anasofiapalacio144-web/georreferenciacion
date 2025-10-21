@@ -1,9 +1,9 @@
 streamlit
 pandas
-geopandas
 matplotlib
+geopandas
+mapclassify
 shapely
 fiona
 pyproj
 rtree
-mapclassify
