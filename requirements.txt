@@ -1,8 +1,11 @@
 streamlit
 pandas
 matplotlib
-geopandas
 folium
+geopandas
 mapclassify
-numpy
 shapely
+numpy
+contextily
+pyproj
+pyshp
