@@ -1,9 +1,8 @@
 streamlit
 pandas
 matplotlib
-folium==0.17.0
-geopandas==0.14.3
+geopandas
+folium
 mapclassify
 numpy
-plotly
 shapely
