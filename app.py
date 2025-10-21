@@ -7,10 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1wFOdDF5jygOCpZdnmmDSJGG-pweAjm_M
 """
 
-# 1) Instalar dependencias (ejecutar solo la primera vez)
-!pip install geopandas matplotlib pyproj contextily mapclassify folium --quiet
-
-# 2) Imports
 import os
 import geopandas as gpd
 import pandas as pd
