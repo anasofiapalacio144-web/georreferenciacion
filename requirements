@@ -1,9 +1,8 @@
-os
-geopandas
-pandas
-matplotlib.pyplot
-mapclassify
-contextily
-Point
-numpy
 streamlit
+pandas
+matplotlib
+geopandas
+contextily
+mapclassify
+shapely
+numpy
