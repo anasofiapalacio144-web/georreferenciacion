@@ -17,232 +17,118 @@ from shapely.geometry import Point
 import numpy as np
 import streamlit as st
 
-
-# Si subes los archivos directamente a Colab (Upload): usa la ruta /content/
-shapefile_path = "/content/MGN_DPTO.shp"  # Ajusta si es necesario
-
-# 4) Leer shapefile
-gdf = gpd.read_file(shapefile_path)
-print("Capa cargada. Número de registros:", len(gdf))
-print("Columnas disponibles:", list(gdf.columns))
-
-# 5) Inspección inicial rápida
-display(gdf.head())
-print("CRS original:", gdf.crs)
-
 # =========================
 # DASHBOARD DE MAPA
 # =========================
-st.header("📊 MAPA INTERACTIVO")
+st.title("🗺️ Mapa temático: Densidad de puntos por departamento")
+st.caption("App desarrollada con Streamlit + GeoPandas + Contextily")
 
-st.caption("Dashboard creado con Streamlit — versión de prueba para exploración de datos.")
+# -------------------------
+# 1️⃣ Subir archivos
+# -------------------------
+st.sidebar.header("📂 Cargar datos")
+uploaded_shp = st.sidebar.file_uploader("Sube tu shapefile (.shp)", type=["shp"])
+uploaded_csv = st.sidebar.file_uploader("Sube tu archivo de puntos (CSV, opcional)", type=["csv"])
 
-# 6) Eliminar geometrías vacías / nulas
-initial_len = len(gdf)
+if uploaded_shp is None:
+    st.warning("Por favor sube un archivo shapefile (.shp) para continuar.")
+    st.stop()
+
+# Guardar el shapefile temporalmente (junto con sus archivos asociados)
+with open("temp.shp", "wb") as f:
+    f.write(uploaded_shp.getbuffer())
+
+shapefile_path = "temp.shp"
+
+# -------------------------
+# 2️⃣ Leer shapefile
+# -------------------------
+gdf = gpd.read_file(shapefile_path)
+st.success(f"Capa cargada correctamente ({len(gdf)} registros)")
+st.write("Vista previa de atributos:")
+st.dataframe(gdf.head())
+
+# -------------------------
+# 3️⃣ Limpieza y validación
+# -------------------------
 gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notnull()].copy()
-print(f"Eliminadas geometrías vacías/nulas: {initial_len - len(gdf)} registros")
+gdf.loc[~gdf.geometry.is_valid, "geometry"] = gdf.loc[~gdf.geometry.is_valid, "geometry"].buffer(0)
 
-# 7) Reparar geometrías inválidas (buffer 0 es un truco común)
-gdf['valid_geometry'] = gdf.geometry.is_valid
-invalid_before = gdf['valid_geometry'].value_counts().get(False, 0)
-if invalid_before > 0:
-    print(f"Geometrías inválidas antes: {invalid_before} — intentando reparación con buffer(0)")
-    gdf.loc[~gdf.geometry.is_valid, 'geometry'] = gdf.loc[~gdf.geometry.is_valid, 'geometry'].buffer(0)
-invalid_after = (~gdf.geometry.is_valid).sum()
-print(f"Geometrías inválidas después: {invalid_after}")
-
-# 8) Normalizar nombres/strings: ejemplo convertir columnas de texto a mayúsculas y strip
-# Detectar columnas de tipo object (strings)
-for col in gdf.select_dtypes(include=['object']).columns:
-    try:
-        gdf[col] = gdf[col].astype(str).str.strip()
-        # opcional: gdf[col] = gdf[col].str.upper()
-    except Exception:
-        pass
-
-# 9) Quitar duplicados basados en geometría y en un identificador si existe
-if 'geom_wkt' not in gdf.columns:
-    gdf['geom_wkt'] = gdf.geometry.apply(lambda x: x.wkt)
-dups = gdf.duplicated(subset=['geom_wkt'])
-if dups.sum() > 0:
-    print(f"Eliminando {dups.sum()} duplicados por geometría")
-    gdf = gdf[~dups].copy()
-gdf.drop(columns=['geom_wkt'], inplace=True)
-
-# 10) Revisar valores nulos en columnas clave (mostrar top columnas con nulos)
-null_counts = gdf.isnull().sum().sort_values(ascending=False).head(20)
-print("Conteo de nulos (top 20 columnas):")
-print(null_counts)
-
-# 11) Si no tiene CRS, intentar inferir - si falla, define manualmente (ejemplo EPSG:4326)
+# -------------------------
+# 4️⃣ Proyección y cálculo de área
+# -------------------------
 if gdf.crs is None:
-    print("CRS no está definido. Asumiendo EPSG:4326 (lon/lat). Si esto es incorrecto, cambia manualmente.")
     gdf.set_crs(epsg=4326, inplace=True)
-print("CRS actual (post-check):", gdf.crs)
 
-# 12) Reproyectar a un CRS métrico para medidas (en Colombia, por ejemplo EPSG:3116 o usa EPSG:3857 si prefieres web)
-# Recomiendo EPSG:3116 (MAGNA-SIRGAS / Colombia Bogota zone) para cálculos de área en metros.
 metric_crs = "EPSG:3116"
 gdf_m = gdf.to_crs(metric_crs)
-print("Reproyectado a:", metric_crs)
+gdf_m["area_km2"] = (gdf_m.geometry.area / 1e6).round(3)
 
-# 13) Calcular área en km2 y agregar como columna
-gdf_m['area_m2'] = gdf_m.geometry.area
-gdf_m['area_km2'] = gdf_m['area_m2'] / 1e6
-gdf_m['area_km2'] = gdf_m['area_km2'].round(3)
-print("Áreas calculadas (km2), muestra:")
-display(gdf_m[['area_km2']].sort_values('area_km2', ascending=False).head())
-
-puntos_csv_path = "/content/puntos_muestreo.csv"  # Cambia si subes un CSV con lon/lat y columnas 'longitude','latitude'
-
-if os.path.exists(puntos_csv_path):
-    print("CSV de puntos encontrado. Cargando y transformando a GeoDataFrame...")
-    pts_df = pd.read_csv(puntos_csv_path)
-    # Asegúrate de que el CSV tenga columnas 'longitude' y 'latitude' o ajusta los nombres
-    pts_gdf = gpd.GeoDataFrame(pts_df, geometry=gpd.points_from_xy(pts_df['longitude'], pts_df['latitude']), crs="EPSG:4326")
+# -------------------------
+# 5️⃣ Puntos (CSV o generados)
+# -------------------------
+if uploaded_csv:
+    pts_df = pd.read_csv(uploaded_csv)
+    pts_gdf = gpd.GeoDataFrame(
+        pts_df,
+        geometry=gpd.points_from_xy(pts_df["longitude"], pts_df["latitude"]),
+        crs="EPSG:4326"
+    )
+    st.info("✅ CSV cargado correctamente.")
 else:
-    print("No se encontró CSV de puntos. Creando puntos aleatorios de ejemplo dentro del bounding box.")
-    bbox = gdf.total_bounds  # (minx, miny, maxx, maxy) en CRS original
-    minx, miny, maxx, maxy = bbox
+    st.info("No se subió CSV, generando 100 puntos aleatorios de ejemplo.")
+    minx, miny, maxx, maxy = gdf.total_bounds
     np.random.seed(42)
-    n_points = 100
-    xs = np.random.uniform(minx, maxx, n_points)
-    ys = np.random.uniform(miny, maxy, n_points)
+    xs = np.random.uniform(minx, maxx, 100)
+    ys = np.random.uniform(miny, maxy, 100)
     pts = [Point(x, y) for x, y in zip(xs, ys)]
-    pts_gdf = gpd.GeoDataFrame({'id_point': range(len(pts))}, geometry=pts, crs=gdf.crs)
+    pts_gdf = gpd.GeoDataFrame({"id_point": range(100)}, geometry=pts, crs=gdf.crs)
 
-# Reproyectar puntos al CRS métrico (coherente con gdf_m)
 pts_gdf_m = pts_gdf.to_crs(metric_crs)
 
-# Spatial join: asignar a cada punto el departamento donde cae
-joined = gpd.sjoin(pts_gdf_m, gdf_m, how="left", predicate='within')  # 'within' o 'intersects' según convenga
-print("Resultado del join espacial (muestra):")
-display(joined.head())
+# -------------------------
+# 6️⃣ Join espacial y conteo
+# -------------------------
+joined = gpd.sjoin(pts_gdf_m, gdf_m, how="left", predicate="within")
+counts = joined.groupby("index_right").size().rename("n_points").reset_index()
+gdf_m = gdf_m.reset_index().merge(counts, left_index=True, right_on="index_right", how="left")
+gdf_m["n_points"] = gdf_m["n_points"].fillna(0).astype(int)
+gdf_m["points_per_1000km2"] = ((gdf_m["n_points"] / gdf_m["area_km2"]) * 1000).round(2)
 
-# Contabilizar número de puntos por departamento
-if 'index_right' in joined.columns:
-    counts = joined.groupby('index_right').size().rename('n_points').reset_index()
-    counts['index_right'] = counts['index_right'].astype(int)
-    # unir conteos con gdf_m
-    gdf_m = gdf_m.reset_index().merge(counts, left_index=True, right_on='index_right', how='left').set_index('index')
-    # reemplazar NaN por 0
-    gdf_m['n_points'] = gdf_m['n_points'].fillna(0).astype(int)
-else:
-    # si sjoin devolvió otra estructura (dependiendo de versiones), buscar columna del dpto
-    # Aquí un fallback: intentar agrupar por el nombre del departamento si existe
-    name_col_candidates = [c for c in gdf_m.columns if 'NOM' in c.upper() or 'NAME' in c.upper() or 'DPTO' in c.upper()]
-    if name_col_candidates:
-        name_col = name_col_candidates[0]
-        counts2 = joined.groupby(name_col).size().rename('n_points').reset_index()
-        gdf_m = gdf_m.merge(counts2, left_on=name_col, right_on=name_col, how='left')
-        gdf_m['n_points'] = gdf_m['n_points'].fillna(0).astype(int)
-    else:
-        gdf_m['n_points'] = 0  # si no se puede hacer, poner 0 para que el script siga
+# -------------------------
+# 7️⃣ Clasificación y mapa
+# -------------------------
+var = "points_per_1000km2"
+classifier = mapclassify.NaturalBreaks(gdf_m[var], k=6)
+gdf_m["class"] = classifier.yb
 
-print("n_points agregado a gdf_m (muestra):")
-display(gdf_m[['n_points']].head())
-
-
-# 1) Preparar columna a mapear: ejemplo 'n_points' por 1000 km2 => densidad
-gdf_m['points_per_1000km2'] = (gdf_m['n_points'] / gdf_m['area_km2']) * 1000
-gdf_m['points_per_1000km2'] = gdf_m['points_per_1000km2'].replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-
-# 2) Clasificación para la leyenda: usar NaturalBreaks (Jenks) o Quantiles
-var = 'points_per_1000km2'
-n_classes = 6
-classifier = mapclassify.NaturalBreaks(gdf_m[var], k=n_classes)
-gdf_m['class'] = classifier.yb
-
-# 3) Preparar figura (reproyectar a web mercator para contextily si se desea basemap)
 gdf_web = gdf_m.to_crs(epsg=3857)
-fig, ax = plt.subplots(1, 1, figsize=(12, 10))
-gdf_web.plot(column='class', cmap='viridis', linewidth=0.4, ax=ax, edgecolor='0.6', legend=False)
-
-# Añadir leyenda manual basada en classifier.bins
-bins = classifier.bins
-# construir labels
-labels = []
-lower = 0.0
-for b in bins:
-    labels.append(f"{lower:.2f} – {b:.2f}")
-    lower = b
-# última clase (mayor que último bin)
-labels[-1] = labels[-1]  # ya incluye el último
-# Crear una colorbar/leyenda
-sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=gdf_m[var].min(), vmax=gdf_m[var].max()))
-sm._A = []
-cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
-cbar.set_label("Puntos por 1000 km²", fontsize=12)
-
-# Añadir basemap (contextily)
+fig, ax = plt.subplots(figsize=(10, 8))
+gdf_web.plot(column="class", cmap="viridis", linewidth=0.3, ax=ax, edgecolor="0.6", legend=False)
 ctx.add_basemap(ax, source=ctx.providers.OpenTopoMap, crs=gdf_web.crs.to_string(), zoom=6)
-
-# Títulos y anotaciones
-ax.set_title("Mapa temático: densidad de puntos por departamento (puntos por 1000 km²)", fontsize=14)
 ax.set_axis_off()
+ax.set_title("Densidad de puntos por 1000 km²", fontsize=14)
+st.pyplot(fig)
 
-# Guardar figura
-out_fig = "/content/mapa_tematico_points_per_1000km2.png"
-plt.savefig(out_fig, dpi=300, bbox_inches='tight')
-print(f"Mapa guardado en: {out_fig}")
-plt.show()
+# -------------------------
+# 8️⃣ Resultados y análisis
+# -------------------------
+st.subheader("📊 Resumen estadístico")
+st.write(gdf_m[["area_km2", "n_points", "points_per_1000km2"]].describe())
 
-# -----------------------
-# EXPORTAR RESULTADOS
-# -----------------------
+top_density = gdf_m.sort_values("points_per_1000km2", ascending=False).head(5)
+st.subheader("🏆 Top 5 departamentos por densidad de puntos")
+st.dataframe(top_density[["n_points", "points_per_1000km2", "area_km2"]])
 
-# Exportar shapefile con las nuevas columnas (reproyectado al CRS métrico para coherencia)
-out_shp = "/content/MGN_DPTO_enriquecido.shp"
-gdf_m.to_file(out_shp)
-print("Shapefile exportado a:", out_shp)
+# Insight automático simple
+col_name = next((c for c in gdf_m.columns if "NOM" in c.upper() or "NAME" in c.upper()), None)
+if col_name:
+    max_row = top_density.iloc[0]
+    st.markdown(f"""
+    **Insight rápido:**
+    - El departamento con mayor densidad de puntos es **{max_row[col_name]}**
+      con aproximadamente **{max_row['points_per_1000km2']} puntos/1000 km².**
+    """)
 
-# También exportar a GeoPackage (más robusto)
-out_gpkg = "/content/MGN_DPTO_enriquecido.gpkg"
-gdf_m.to_file(out_gpkg, layer='departamentos', driver="GPKG")
-print("GeoPackage exportado a:", out_gpkg)
+st.info("✅ Análisis completado exitosamente.")
 
-# Exportar tabla resumen a CSV
-summary_csv = "/content/resumen_departamentos.csv"
-gdf_m[['area_km2','n_points','points_per_1000km2'] + [c for c in gdf_m.columns if gdf_m[c].dtype != 'geometry']].to_csv(summary_csv, index=True)
-print("CSV de resumen exportado a:", summary_csv)
-
-# -----------------------
-# INSIGHTS CONTEXTUALIZADOS (básicos, editables)
-# -----------------------
-
-# 1) Top 5 departamentos por área
-top_area = gdf_m.sort_values('area_km2', ascending=False).head(5)
-print("\nTop 5 departamentos por área (km2):")
-display(top_area[['area_km2']])
-
-# 2) Top 5 departamentos por densidad de puntos (points_per_1000km2)
-top_density = gdf_m.sort_values('points_per_1000km2', ascending=False).head(10)
-print("\nTop 10 departamentos por densidad de puntos (p/1000 km2):")
-display(top_density[['points_per_1000km2','n_points','area_km2']])
-
-# 3) Estadísticas generales
-print("\nEstadísticas descriptivas de 'points_per_1000km2':")
-print(gdf_m['points_per_1000km2'].describe())
-
-# 4) Insight automático (ejemplo de redacción simple que puedes usar en tu informe)
-# - Si la variable que mapeaste representa muestreos, estaciones o incidencias, se explica el patrón espacial:
-most_populated = top_density.index[0]
-dpto_name_col = None
-# intentar identificar columna de nombre del departamento
-for c in gdf_m.columns:
-    if c.upper() in ['DPTO_CNMBR', 'NOMBRE', 'NOM_DPTO', 'DPTO_NOMBRE'] or 'NOM' in c.upper():
-        dpto_name_col = c
-        break
-
-if dpto_name_col:
-    most_populated_name = gdf_m.loc[most_populated, dpto_name_col]
-else:
-    most_populated_name = str(most_populated)
-
-insight_text = f"""
-Insight rápido:
-- El departamento con mayor densidad de puntos es: {most_populated_name} (≈ {gdf_m.loc[most_populated,'points_per_1000km2']:.2f} puntos/1000 km²).
-- Observación: si los 'puntos' representan estaciones de muestreo, puede existir una concentración en áreas urbanas o costas.
-- Recomendación: revisar correlación entre 'n_points' y variables socio-económicas o acceso (carreteras, población) para interpretar si la distribución es muestreos-biased o realmente representa mayor ocurrencia del fenómeno.
-"""
-print(insight_text)
