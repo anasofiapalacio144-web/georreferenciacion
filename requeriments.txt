@@ -1,9 +1,10 @@
+--extra-index-url https://pypi.anaconda.org/conda-forge/simple
 streamlit
 pandas
 matplotlib
-geopandas==0.14.4
+geopandas
 mapclassify
-shapely
 fiona
+shapely
 pyproj
 rtree
